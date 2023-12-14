@@ -1,0 +1,178 @@
+---
+title: "Analiza korisničkih ocjena sadržaja"
+author: "Mario Perhat"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+```{r setup, include=TRUE, echo= FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+
+library(moments)
+library(boot)
+```
+
+```{r load_data, echo=FALSE, message=FALSE, warning=FALSE}
+# Ucitavanje podataka
+data <- read.csv("google_review_ratings.csv")
+data <- data[, -1]
+data <- na.omit(data)
+num_categories <- ncol(data)
+```
+
+```{r generate_histograms, echo=FALSE}
+#histogram_list <- list()
+#for (i in 1:num_categories) {
+#  numeric_column <- as.numeric(data[[i]])
+#  histogram_list[[i]] <- hist(sqrt(numeric_column), nclass = 10, freq = FALSE, xlab = "", ylab = "", main #  = names(data)[i])
+#}
+```
+```{r generate_histograms_boot, include=FALSE}
+
+
+histogram_list_boot <- list()
+
+for (i in 1:num_categories) {
+  numeric_column <- as.numeric(data[[i]])
+
+  hist(numeric_column, main = paste(names(data)[i]))
+
+  aritm_sredina <- function(data, indices) {
+    subset_data <- data[indices]
+    return(mean(subset_data))
+  }
+
+  R <- 100
+
+  bootstrap_results <- boot(data = numeric_column, statistic = aritm_sredina, R = R)
+
+  plot(bootstrap_results, main = paste("Bootstrap Results for", col_name))
+
+}
+```
+
+## Odnos ocjena restorana i restorana brze prehrane?
+```{r odnos_rest_brza_deskriptivno, echo=FALSE}
+ocjene_restorana <- data[[9]]
+ocjene_brze_prehrane <- data[[12]]
+
+srednja_ocjena_restorana <- mean(ocjene_restorana)
+srednja_ocjena_brze_prehrane <- mean(ocjene_brze_prehrane)
+medijan_restorana<-median(ocjene_restorana)
+medijan_brze_prehrane<-median(ocjene_brze_prehrane)
+varijanca_ocjena_restorana<-var(ocjene_restorana)
+varijanca_brze_prehrane<-median(ocjene_brze_prehrane)
+```
+
+#### Srednja ocjena i varijanca za restorane:
+```{r, echo=FALSE} 
+print(paste(srednja_ocjena_restorana))
+print(paste(varijanca_ocjena_restorana))
+```
+
+
+#### Srednja ocjena i varijanca za restorane brze prehrane:
+```{r, echo=FALSE}
+print(paste(srednja_ocjena_brze_prehrane))
+print(paste(varijanca_brze_prehrane))
+```
+Iz izračunatih srednjih vrijednosti podataka naslučujemo da korisnici bolje ocjenjuju obične restorane od restorana brze prehrane. Varijance su slične vrijednosti te nas zanima može li se kojim slučajem odbaciti hipoteza da su jednake. Prethodne pretpostavke ne možemo zaključiti izravno statističkim testom iz podataka jer iz histograma je očito da nemaju normalnu razdiobu, što ćemo i testirati s Kolmogorov-Smirnovljevim testom.
+```{r,echo=FALSE}
+hist(ocjene_restorana, main = paste(names(data)[9]))
+hist(ocjene_brze_prehrane, main = paste(names(data)[12]))
+```
+
+```{r, echo=FALSE}
+print("Kolmogorov-Smirnovljev test za ocjene restorana")
+ks_test_restoran <- ks.test(ocjene_restorana, "pnorm", mean = mean(ocjene_restorana), sd = sd(ocjene_restorana))
+print(ks_test_restoran)
+
+print("Kolmogorov-Smirnovljev test za ocjene restorana brze prehrane")
+ks_test_brza_prehrana <- ks.test(ocjene_brze_prehrane, "pnorm", mean = mean(ocjene_brze_prehrane), sd = sd(ocjene_brze_prehrane))
+print(ks_test_brza_prehrana)
+#Ponavljanje podataka je problem? Alternative Skewness-Kurtosis All test?
+
+
+print("Skewness-Kurtosis All test za restorane")
+skewness(ocjene_restorana)
+kurtosis(ocjene_restorana)
+jarque.test(ocjene_restorana)
+print("Skewness-Kurtosis All test za restorane brze prehrane")
+skewness(ocjene_brze_prehrane)
+kurtosis(ocjene_brze_prehrane)
+jarque.test(ocjene_brze_prehrane)
+```
+
+Iz Kolmogorov-smirnovljev testa možemo pretpostaviti da podaci nemaju normalnu razdiobu, ali taj test je osjetljiv na ponavljanje istih podataka. Proveli smo Skewness-Kurtosis all test i Jarque-Bera test normalnosti kako bi se uvjerili da nema utjecaja ponavljanja podataka na pretpostavku. Vrijednosti koje gledamo kod Skewness-Kurtosis testa kod oba uzorka dosta se razlikuju od nominalnih vrijednosti normalne razdiobe, također smo sproveli jarque.test() nad podacima gdje se statistički testiraju skewness i kurtosis podataka naspram vrijednosti koje bi imala normalna razdioba. U njemu se odbacuje nulta hipoteza te možemo pretpostaviti da nisu oba uzorka normalne razdiobe. Obzirom na prethodni zaključak ne možemo provoditi nikakve statističke testove nad njima u ovoj formi.
+Pokušati ćemo svesti podatke na normalnost logaritamskom transformacijom i korijenovanjem podataka.
+
+```{r,echo=FALSE}
+hist(log(ocjene_restorana), main = paste(names(data)[9]))
+hist(log(ocjene_brze_prehrane), main = paste(names(data)[12]))
+hist(sqrt(ocjene_restorana), main = paste(names(data)[9]))
+hist(sqrt(ocjene_brze_prehrane), main = paste(names(data)[12]))
+```
+
+Možemo sprovesti testove normalnosti za transformirane podatke ( ne znam ima li smisla iz histograma se vidi da nisu). TODO ako treba
+
+#podaci imaju vrijednosti između 0 i 1? Treba li ih izbaciti? 
+
+Podatke ne možemo svesti na normalnu razdiobu stoga za bilo kakve testove za procjenitelje morati ćemo se koristiti bootstrapom. Pretpostavljamo da podaci dobro predstavljaju populaciju i u idućim koracima ćemo ponovno uzorkovati dva skupa podataka kako bi napravili test o srednjim vrijednostima. Broj 1 će nam označavati restorane, a broj 2 restorane brze prehrane.
+
+Postavimo hipoteze:
+$$
+H0: \mu_1=\mu_2
+$$
+$$
+H2: \mu_1>\mu_2
+$$
+Zadamo da je $\alpha$ = 0.05.
+
+```{r, echo=TRUE}
+srednja_vrijednost_svih<-(srednja_ocjena_restorana+srednja_ocjena_brze_prehrane)/2
+ocjene_restorana_boot<-ocjene_restorana-srednja_ocjena_restorana+srednja_vrijednost_svih
+ocjene_brze_boot<-ocjene_brze_prehrane-srednja_ocjena_brze_prehrane+srednja_vrijednost_svih
+
+statistika_aritm_sredina <- function(data1,data2){
+  return((mean(data1)-mean(data2))/sqrt(var(data1)/length(data1) + var(data2)/length((data2))))
+}
+
+#aritm_sredina <- function(data, indices) {
+#    subset_data <- data[indices]
+#    return(mean(subset_data))
+#}
+#varijanca <- function(data, indices) {
+#    subset_data <- data[indices]
+#    return(var(subset_data))
+#  }
+
+R <- 1000
+bootstrap_results_rest <- lapply(1:R, function(x) sample(ocjene_restorana_boot, size = length(ocjene_restorana_boot), replace = TRUE))
+bootstrap_results_brza <- lapply(1:R, function(x) sample(ocjene_brze_boot, size = length(ocjene_brze_boot), replace = TRUE))
+  
+```
+
+
+```{r, echo=TRUE}
+t<-statistika_aritm_sredina(ocjene_restorana,ocjene_brze_prehrane)
+print(t)
+suma<-0
+for(i in 1:length(bootstrap_results_rest)){
+  if(statistika_aritm_sredina(bootstrap_results_rest[[i]],bootstrap_results_brza[[i]]) >= t){
+    suma=suma+1
+  }
+}
+procjena_p<-suma/R
+if (procjena_p < 0.05) {
+  cat("Procjena P vrijednosti =", as.character(procjena_p), "Odbacujemo H0 u korist H1.\n")
+} else {
+  cat("Procjena P vrijednosti =", as.character(procjena_p), "Ne možemo odbaciti H0.\n")
+}
+
+```
+
+Iz testa možemo sa sigurnošću 95% pretpostaviti da srednje vrijednosti tj. srednje ocjene dvije kategorije su različite. Restorani su u prosjeku puno bolje ocjenjivani od restorana brze prehrane.
