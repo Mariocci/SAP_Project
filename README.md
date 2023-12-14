@@ -4,9 +4,6 @@
 
 **Author:**
 - Mario Perhat
-- Nikola Baretić
-- Lana Barić
-- Luka Rogoz
   
 **Publication Date:** December 14, 2023.
   
