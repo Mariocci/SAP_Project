@@ -28,7 +28,7 @@ num_categories <- ncol(data)
 #histogram_list <- list()
 #for (i in 1:num_categories) {
 #  numeric_column <- as.numeric(data[[i]])
-#  histogram_list[[i]] <- hist(sqrt(numeric_column), nclass = 10, freq = FALSE, xlab = "", ylab = "", main #  = names(data)[i])
+#  histogram_list[[i]] <- hist(sqrt(numeric_column), nclass = 10, freq = FALSE, xlab = "", ylab = "", main = names(data)[i])
 #}
 ```
 ```{r generate_histograms_boot, include=FALSE}
@@ -128,14 +128,14 @@ $$
 H0: \mu_1=\mu_2
 $$
 $$
-H2: \mu_1>\mu_2
+H1: \mu_1>\mu_2
 $$
 Zadamo da je $\alpha$ = 0.05.
 
 ```{r, echo=TRUE}
-srednja_vrijednost_svih<-(srednja_ocjena_restorana+srednja_ocjena_brze_prehrane)/2
-ocjene_restorana_boot<-ocjene_restorana-srednja_ocjena_restorana+srednja_vrijednost_svih
-ocjene_brze_boot<-ocjene_brze_prehrane-srednja_ocjena_brze_prehrane+srednja_vrijednost_svih
+srednja_vrijednost_svih <- (srednja_ocjena_restorana + srednja_ocjena_brze_prehrane) / 2
+ocjene_restorana_boot <- ocjene_restorana - srednja_ocjena_restorana + srednja_vrijednost_svih
+ocjene_brze_boot <- ocjene_brze_prehrane - srednja_ocjena_brze_prehrane + srednja_vrijednost_svih
 
 statistika_aritm_sredina <- function(data1,data2){
   return((mean(data1)-mean(data2))/sqrt(var(data1)/length(data1) + var(data2)/length((data2))))
@@ -176,3 +176,50 @@ if (procjena_p < 0.05) {
 ```
 
 Iz testa možemo sa sigurnošću 95% pretpostaviti da srednje vrijednosti tj. srednje ocjene dvije kategorije su različite. Restorani su u prosjeku puno bolje ocjenjivani od restorana brze prehrane.
+
+
+
+
+# predikcija korisničkih ocjena za kategoriju 'zoo'
+
+Za svaku varijablu iz dataseta ispitat ćemo jesu li statistički značajne prilikom predikcije za varijablu 'zoo'. Za parametar family postavljen je Gamma jer vrijednosti nisu nužno normalno distribuirane.
+
+```{r}
+require(caret)
+logreg.mdl = glm(zoo ~ churches + resorts + beaches + parks + theatres + museums + malls + restaurants + pubs.bars + burger.pizza.shops + hotels.other.lodgings + juice.bars + art.galleries + dance.clubs + swimming.pools + gyms + bakeries + beauty...spas + cafes + view.points + monuments + gardens, data = data, family = Gamma())
+summary(logreg.mdl)
+```
+```{r}
+Rsq = 1 - logreg.mdl$deviance/logreg.mdl$null.deviance
+Rsq
+```
+Analizom ispisa vidimo koje kategorije su statistički značajne prema p-vrijednostima; statistički najznačajnije su malls, restaurants, pubs/bars, art galleries i cafes.
+Varijabla rsq, odnosno pseudo-${R}^2$ danog modela govori da model objašnjava otprilike 51% varijabilnosti u podacima.
+
+
+
+Konstruirajmo sada model koji će imati interakcijski član koji uključuje dvije varijable koje su bile među statistički najznačajnijim.
+```{r}
+logreg.mdl.2 = glm(zoo ~ churches + resorts + beaches + parks + theatres + museums + malls + restaurants + pubs.bars + burger.pizza.shops + hotels.other.lodgings + juice.bars + art.galleries + dance.clubs + swimming.pools + gyms + bakeries + beauty...spas + cafes + view.points + monuments + gardens + I(cafes/malls), data = data, family = Gamma())
+summary(logreg.mdl.2)
+```
+Provedimo nad originalnim i ovim, proširenim modelom test omjera izglednosti te, ukoliko je devijanca proširenog modela značajno manja, prihvatit ćemo ga umjesto originalnog modela.
+
+```{r}
+anova(logreg.mdl, logreg.mdl.2, test = "LRT")
+```
+Konstruirajmo još jedan, smanjeni model, koji neće sadržavati regresore koji nisu bili statistički značajni te ponovno provedimo test omjera izglednosti.
+
+```{r}
+logreg.mdl.3 = glm(zoo ~ churches + beaches + parks + theatres + museums + malls + restaurants + pubs.bars + burger.pizza.shops + juice.bars + art.galleries + bakeries + beauty...spas + cafes + view.points + monuments + gardens, data = data, family = Gamma())
+summary(logreg.mdl.3)
+```
+```{r}
+anova(logreg.mdl, logreg.mdl.3, test = "LRT")
+```
+Konačno, izračunajmo još koeficijent determinacije za prošireni model.
+```{r}
+Rsq = 1 - logreg.mdl.2$deviance/logreg.mdl.2$null.deviance
+Rsq
+```
+Vidimo kako prošireni model opisuje veću količinu varijabilnosti među podacima nego osnovni model.
