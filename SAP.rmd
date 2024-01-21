@@ -1,6 +1,6 @@
 ---
 title: "Analiza korisničkih ocjena sadržaja"
-author: "Mario Perhat"
+author: "Mario Perhat, Luka Rogoz, Lana Barić, Nikola Baretić"
 output:
   word_document: default
   html_document:
@@ -8,12 +8,20 @@ output:
   pdf_document: default
 ---
 
-```{r setup, include=TRUE, echo= FALSE}
+```{r setup, include=FALSE, echo= FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 options(repos = c(CRAN = "https://cloud.r-project.org"))
 
 library(moments)
 library(boot)
+library(dplyr)
+library(tidyr)
+library(conflicted)
+library(datasets)
+library(ggplot2)
+library(multcompView)
+library(tidyverse)
+library(car)
 ```
 
 ```{r load_data, echo=FALSE, message=FALSE, warning=FALSE}
@@ -23,37 +31,268 @@ data <- data[, -1]
 data <- na.omit(data)
 num_categories <- ncol(data)
 ```
+Prikazati ćemo histograme svih kategorija kako bi dobili predođbu o podacima.
 
-```{r generate_histograms, echo=FALSE}
-#histogram_list <- list()
-#for (i in 1:num_categories) {
-#  numeric_column <- as.numeric(data[[i]])
-#  histogram_list[[i]] <- hist(sqrt(numeric_column), nclass = 10, freq = FALSE, xlab = "", ylab = "", main = names(data)[i])
-#}
-```
-```{r generate_histograms_boot, include=FALSE}
-
-
-histogram_list_boot <- list()
-
+```{r, echo=FALSE}
+histogram_list <- list()
 for (i in 1:num_categories) {
   numeric_column <- as.numeric(data[[i]])
-
-  hist(numeric_column, main = paste(names(data)[i]))
-
-  aritm_sredina <- function(data, indices) {
-    subset_data <- data[indices]
-    return(mean(subset_data))
-  }
-
-  R <- 100
-
-  bootstrap_results <- boot(data = numeric_column, statistic = aritm_sredina, R = R)
-
-  plot(bootstrap_results, main = paste("Bootstrap Results for", col_name))
-
+  histogram_list[[i]] <- hist(sqrt(numeric_column), nclass = 10, freq = FALSE, xlab = "", ylab = "", main = names(data)[i])
 }
 ```
+
+## Usporedba najpolarizirajućih i najmanje polarizirajućih kategorija
+
+```{r include=FALSE, echo = FALSE}
+data <- read.csv("google_review_ratings.csv")
+data <- data[, -1]
+data <- na.omit(data)
+num_categories <- ncol(data)
+data_converted <- data.frame(lapply(data, function(x) {
+# Attempt to convert to numeric
+numeric_x <- as.numeric(as.character(x))
+# Check if conversion was successful (no NAs introduced)
+if(all(!is.na(numeric_x))) {
+return(numeric_x)
+} else {
+return(x)
+}
+}))
+long_data <- pivot_longer(data_converted,
+cols = names(data),
+names_to = "category",
+values_to = "rating")
+#long_data <- long_data %>%
+#dplyr::filter(rating >= 1)
+model <- aov(rating ~ category, data = long_data)
+#summary(model)
+tukey <- TukeyHSD(model, ordered = TRUE)
+
+cld <- multcompLetters4(model, tukey)
+Tk <- long_data %>%
+  group_by(category) %>%
+  summarise(mean = mean(rating), quant = quantile(rating, probs = 0.75), variance = var(rating)) %>%
+  arrange(desc(variance))
+
+cldL <- as.data.frame.list(cld$category)
+Tk$cld <- cldL$Letters
+```
+
+```{r echo = FALSE, include = FALSE}
+
+#print(Tk)
+    ggplot(long_data, aes(y=category, x=rating)) + theme_classic() +  geom_boxplot(aes(fill = category),outlier.size = 0.4, show.legend = FALSE) +  theme_bw() + 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + geom_text(data = Tk, aes(x = quant, y = category, label = cld), size = 5, hjust= +3)
+```
+
+```{r echo = FALSE, include=FALSE}
+ggplot(long_data, aes(y = category, x = rating)) +
+  geom_violin(trim = TRUE, width = 0.90) +
+  theme_light() +
+  labs(title = "Violin Plot", y = "Category",x = "Rating")
+```
+
+### Pogledajmo 5 najvećih varijanci
+
+```{r echo = FALSE}
+top_variance_df <- long_data %>%
+  group_by(category) %>%
+  summarise(
+    variance = var(rating),
+    median = median(rating),
+    mean = mean(rating),
+    razlika = abs(mean(rating) - median(rating))
+    ) %>%
+  arrange(desc(variance)) %>%
+  head(n = 5)
+print(top_variance_df)
+top_categories <- top_variance_df$category
+```
+
+```{r echo = FALSE}
+filtered_data <- long_data[long_data$category %in% top_categories, ]
+filtered_data$category <- factor(filtered_data$category, levels = rev(top_variance_df$category))
+ggplot(filtered_data, aes(y=category, x=rating)) + geom_boxplot(width = 0.75, outlier.size = 0.4) + theme_classic()
+```
+
+```{r echo = FALSE}
+ggplot(filtered_data, aes(y = category, x = rating)) +
+    geom_violin(trim = TRUE, width = 0.90) +
+    theme_light() +
+    labs(title = "Violin Plot", y = "Category",x = "Rating")
+```
+
+Iz grafičkog prikaza i varijance možemo reći da su kategorije art.galleries, view.points i juice.bars najviše polarizirajuće.
+
+
+Pokušajmo ih usporediti koristeći različite statističke testove. Cilj ovih testova je usporedba kumulativnih distribucija ocjena među ovim kategorijama. Testovi koje ćemo koristiti su Kolmogorov-Smirnovljev test i Wilcoxonov test. Svaki od ovih testova ima svoju specifičnu hipotezu:
+Kolmogorov-Smirnovljev test:
+$$ H0: \text{distribucije dviju kategorija su jednake} $$
+$$ H1: \text{distribucije dviju kategorija nisu jednake} $$
+Wilcoxonov test:
+$$ H0: \text{medijani dviju kategorija su jednaki} $$
+$$ H1: \text{medijani dviju kategorija nisu jednaki} $$
+Mann-Whitney U test:
+$$ H0: \text{populacije iz kojih su uzeti uzorci imaju jednake distribucije} $$
+$$ H1: \text{populacije iz kojih su uzeti uzorci nemaju jednake distribucije} $$
+
+```{r echo = FALSE,warning=FALSE}
+top_categories <- c("art.galleries", "view.points", "juice.bars")
+filtered_data <- long_data[long_data$category %in% top_categories, ]
+filtered_data$category <- factor(filtered_data$category, levels = rev(top_variance_df$category))
+
+category_pairs <- combn(top_categories, 2, simplify = FALSE)
+
+results <- lapply(category_pairs, function(pair) {
+  data1 <- subset(long_data, category == pair[1])$rating
+  data2 <- subset(long_data, category == pair[2])$rating
+
+  ks_test_result <- ks.test(data1, data2)
+  wilcox_test_result <- wilcox.test(data1, data2, paired = TRUE)
+  mann_whitney_test_result <- wilcox.test(data1, data2, exact = FALSE, correct = FALSE)
+
+  return(list(category_pair = pair, 
+              ks_test_result = ks_test_result,
+              wilcox_test_result = wilcox_test_result,
+              mann_whitney_test_result = mann_whitney_test_result))
+})
+
+for (result in results) {
+  cat("Pair of categories:", result$category_pair, "\n")
+  cat("Kolmogorov-Smirnov Test:\n")
+  print(result$ks_test_result)
+  cat("Wilcoxon Test:\n")
+  print(result$wilcox_test_result)
+  cat("Mann-Whitney U Test:\n")
+  print(result$mann_whitney_test_result)
+}
+```
+
+```{r echo = FALSE}
+ggplot(filtered_data, aes(y = category, x = rating)) +
+  geom_violin() +
+  labs(y = "Category", x = "Rating")
+```
+
+Analizirajući rezultate statističkih testova za različite parove kategorija, možemo zaključiti da postoje statistički značajne razlike u ocjenama između svih ovih parova kategorija. Ovo je potvrđeno vrlo niskim p-vrijednostima u svim testovima. Ovi rezultati ukazuju na značajne razlike kako u distribuciji i središnjim tendencijama(medijanu) ocjena između svih ovih kategorija. Jedina iznimka je par kategorija art.galleries i juice.bars, gdje Wilcoxonov test ne pokazuje statistički značajnu razliku u središnjim tendencijama (p-vrijednost = 0.2395). 
+
+
+```{r echo = FALSE, include=FALSE}
+plot_ecdf <- function(category_name, data) {
+  selected_category_data <- subset(data, category == category_name, select = rating)
+  data_vector <- selected_category_data[[1]]
+  ecdf_data <- ecdf(data_vector)
+
+  data_frame_for_plot <- data.frame(x = data_vector, F = ecdf_data(data_vector))
+  p <- ggplot(data_frame_for_plot, aes(x, F)) +
+    geom_step() +
+    labs(title = paste("ECDF za", category_name), x = "Values", y = "ECDF")
+
+  return(p)
+}
+
+for(category in top_categories) {
+  print(plot_ecdf(category, long_data))
+}
+```
+
+### Pogledajmo 5 najmanjih varijanci
+Pogledajmo 5 najmanjih varijanci i njihove grafičke prikaze
+
+```{r echo = FALSE}
+bot_variance_df <- long_data %>%
+  group_by(category) %>%
+  summarise(
+    variance = var(rating),
+    median = median(rating),
+    mean = mean(rating),
+    razlika = abs(mean(rating) - median(rating))
+  ) %>%
+  arrange((variance)) %>%
+  head(n = 5)
+print(bot_variance_df)
+bot_categories <- bot_variance_df$category
+```
+```{r echo = FALSE}
+filtered_data <- subset(long_data , category %in% bot_categories)
+filtered_data$category <- factor(filtered_data$category, levels = rev(bot_variance_df$category))
+
+    ggplot(filtered_data, aes(y=category, x=rating)) + geom_boxplot(width = 0.75, outlier.size = 0.4) + theme_classic()
+```
+```{r echo = FALSE}
+ggplot(filtered_data, aes(y = category, x = rating)) +
+    geom_violin(trim = TRUE, width = 0.9) +
+    theme_light() +
+    labs(title = "Violin Plot", y = "Category", x = "Rating")
+```
+
+Iz grafikog prikaza možemo reći da se korisnici najviše slažu oko ocijena za kategorije churches, cafes, gyms i swimming.pools.
+
+Pokušajmo ih usporediti koristeći različite statističke testove. Cilj ovih testova je usporedba kumulativnih distribucija ocjena među ovim kategorijama. Testovi koje ćemo koristiti su Kolmogorov-Smirnovljev test i Wilcoxonov test Svaki od ovih testova ima svoju specifičnu hipotezu:
+Kolmogorov-Smirnovljev test:
+$$ H0: \text{distribucije dviju kategorija su jednake} $$
+$$ H1: \text{distribucije dviju kategorija nisu jednake} $$
+Wilcoxonov test:
+$$ H0: \text{medijani dviju kategorija su jednaki} $$
+$$ H1: \text{medijani dviju kategorija nisu jednaki} $$
+Mann-Whitney U test:
+$$ H0: \text{populacije iz kojih su uzeti uzorci imaju jednake distribucije} $$
+$$ H1: \text{populacije iz kojih su uzeti uzorci nemaju jednake distribucije} $$
+
+```{r, echo = FALSE,warning=FALSE}
+bot_categories <- c("cafes", "gyms", "swimming.pools", "churches")
+filtered_data <- subset(long_data , category %in% bot_categories)
+filtered_data$category <- factor(filtered_data$category, levels = rev(bot_variance_df$category))
+
+category_pairs <- combn(bot_categories, 2, simplify = FALSE)
+
+results <- lapply(category_pairs, function(pair) {
+  data1 <- subset(long_data, category == pair[1])$rating
+  data2 <- subset(long_data, category == pair[2])$rating
+
+  ks_test_result <- ks.test(data1, data2)
+  wilcox_test_result <- wilcox.test(data1, data2, paired = TRUE)
+  mann_whitney_test_result <- wilcox.test(data1, data2, exact = FALSE, correct = FALSE)
+
+  return(list(category_pair = pair, 
+              ks_test_result = ks_test_result,
+              wilcox_test_result = wilcox_test_result,
+              mann_whitney_test_result = mann_whitney_test_result))
+})
+
+for (result in results) {
+  cat("Pair of categories:", result$category_pair, "\n")
+  cat("Kolmogorov-Smirnov Test:\n")
+  print(result$ks_test_result)
+  cat("Wilcoxon Test:\n")
+  print(result$wilcox_test_result)
+  cat("Mann-Whitney U Test:\n")
+  print(result$mann_whitney_test_result)
+}
+```
+
+Analizirajući rezultate statističkih testova za različite parove kategorija, možemo zaključiti da postoje statistički značajne razlike u ocjenama između svih ovih parova kategorija. Ovo je potvrđeno vrlo niskim p-vrijednostima u svim testovima. Ovi rezultati ukazuju na značajne razlike kako u distribuciji i središnjim tendencijama(medijanu) ocjena između svih ovih kategorija. Jedina iznimka je par kategorija cafes i swimming.pools, gdje Wilcoxonov test ne pokazuje statistički značajnu razliku u središnjim tendencijama (p-vrijednost = 0.07445).
+
+
+```{r echo = FALSE, include=FALSE}
+plot_ecdf <- function(category_name, data) {
+  selected_category_data <- subset(data, category == category_name, select = rating)
+  data_vector <- selected_category_data[[1]]
+  ecdf_data <- ecdf(data_vector)
+
+  data_frame_for_plot <- data.frame(x = data_vector, F = ecdf_data(data_vector))
+  p <- ggplot(data_frame_for_plot, aes(x, F)) +
+    geom_step() +
+    labs(title = paste("ECDF za", category_name), x = "Values", y = "ECDF")
+
+  return(p)
+}
+
+for(category in bot_categories) {
+  print(plot_ecdf(category, long_data))
+}
+```
+
 
 ## Odnos ocjena restorana i restorana brze prehrane?
 ```{r odnos_rest_brza_deskriptivno, echo=FALSE}
@@ -80,7 +319,9 @@ print(paste(varijanca_ocjena_restorana))
 print(paste(srednja_ocjena_brze_prehrane))
 print(paste(varijanca_brze_prehrane))
 ```
+
 Iz izračunatih srednjih vrijednosti podataka naslučujemo da korisnici bolje ocjenjuju obične restorane od restorana brze prehrane. Varijance su slične vrijednosti te nas zanima može li se kojim slučajem odbaciti hipoteza da su jednake. Prethodne pretpostavke ne možemo zaključiti izravno statističkim testom iz podataka jer iz histograma je očito da nemaju normalnu razdiobu, što ćemo i testirati s Kolmogorov-Smirnovljevim testom.
+
 ```{r,echo=FALSE}
 hist(ocjene_restorana, main = paste(names(data)[9]))
 hist(ocjene_brze_prehrane, main = paste(names(data)[12]))
@@ -117,9 +358,7 @@ hist(sqrt(ocjene_restorana), main = paste(names(data)[9]))
 hist(sqrt(ocjene_brze_prehrane), main = paste(names(data)[12]))
 ```
 
-Možemo sprovesti testove normalnosti za transformirane podatke ( ne znam ima li smisla iz histograma se vidi da nisu). TODO ako treba
-
-#podaci imaju vrijednosti između 0 i 1? Treba li ih izbaciti? 
+Možemo sprovesti testove normalnosti za transformirane podatke (iz histograma se vidi da nisu, tako da ih nećemo provodit direktno).
 
 Podatke ne možemo svesti na normalnu razdiobu stoga za bilo kakve testove za procjenitelje morati ćemo se koristiti bootstrapom. Pretpostavljamo da podaci dobro predstavljaju populaciju i u idućim koracima ćemo ponovno uzorkovati dva skupa podataka kako bi napravili test o srednjim vrijednostima. Broj 1 će nam označavati restorane, a broj 2 restorane brze prehrane.
 
@@ -132,7 +371,7 @@ H1: \mu_1>\mu_2
 $$
 Zadamo da je $\alpha$ = 0.05.
 
-```{r, echo=TRUE}
+```{r, echo=FALSE}
 srednja_vrijednost_svih <- (srednja_ocjena_restorana + srednja_ocjena_brze_prehrane) / 2
 ocjene_restorana_boot <- ocjene_restorana - srednja_ocjena_restorana + srednja_vrijednost_svih
 ocjene_brze_boot <- ocjene_brze_prehrane - srednja_ocjena_brze_prehrane + srednja_vrijednost_svih
@@ -141,15 +380,6 @@ statistika_aritm_sredina <- function(data1,data2){
   return((mean(data1)-mean(data2))/sqrt(var(data1)/length(data1) + var(data2)/length((data2))))
 }
 
-#aritm_sredina <- function(data, indices) {
-#    subset_data <- data[indices]
-#    return(mean(subset_data))
-#}
-#varijanca <- function(data, indices) {
-#    subset_data <- data[indices]
-#    return(var(subset_data))
-#  }
-
 R <- 1000
 bootstrap_results_rest <- lapply(1:R, function(x) sample(ocjene_restorana_boot, size = length(ocjene_restorana_boot), replace = TRUE))
 bootstrap_results_brza <- lapply(1:R, function(x) sample(ocjene_brze_boot, size = length(ocjene_brze_boot), replace = TRUE))
@@ -157,7 +387,7 @@ bootstrap_results_brza <- lapply(1:R, function(x) sample(ocjene_brze_boot, size 
 ```
 
 
-```{r, echo=TRUE}
+```{r, echo=FALSE}
 t<-statistika_aritm_sredina(ocjene_restorana,ocjene_brze_prehrane)
 print(t)
 suma<-0
@@ -180,46 +410,175 @@ Iz testa možemo sa sigurnošću 95% pretpostaviti da srednje vrijednosti tj. sr
 
 
 
-# predikcija korisničkih ocjena za kategoriju 'zoo'
+## predikcija korisničkih ocjena za kategoriju 'zoo'
 
-Za svaku varijablu iz dataseta ispitat ćemo jesu li statistički značajne prilikom predikcije za varijablu 'zoo'. Za parametar family postavljen je Gamma jer vrijednosti nisu nužno normalno distribuirane.
+Proučimo odnose između kategorije zoo s ostalim kategorijama konstruirajući scatter plot-ove.
 
-```{r}
-require(caret)
-logreg.mdl = glm(zoo ~ churches + resorts + beaches + parks + theatres + museums + malls + restaurants + pubs.bars + burger.pizza.shops + hotels.other.lodgings + juice.bars + art.galleries + dance.clubs + swimming.pools + gyms + bakeries + beauty...spas + cafes + view.points + monuments + gardens, data = data, family = Gamma())
-summary(logreg.mdl)
+```{r generate_histograms, echo=FALSE}
+plot_list <- list()
+for (i in 1:num_categories) {
+  if (i != 8) {
+    numeric_column <- as.numeric(data[[i]])
+    plot_list[[i]] <- plot(numeric_column, data$zoo, xlab = colnames(data)[i], ylab = "zoo")
+  }
+}
 ```
-```{r}
-Rsq = 1 - logreg.mdl$deviance/logreg.mdl$null.deviance
-Rsq
+
+Iz konstruiranih grafova možemo zaključiti da izražen utjecaj na izlaznu varijablu 'zoo' imaju: 'malls', 'restaurants' i 'pubs.bars'. Kako bi ispitali pojedinačni utjecaj ovih varijabli, procijenit ćemo model jednostvane regresije, uz zoo kao zavisnu varijablu.
+
+```{r, echo=FALSE}
+fit.malls = lm(zoo ~ malls, data = data)
+fit.restaurants = lm(zoo ~ restaurants, data = data)
+fit.pubs_bars = lm(zoo ~ pubs.bars, data = data)
 ```
-Analizom ispisa vidimo koje kategorije su statistički značajne prema p-vrijednostima; statistički najznačajnije su malls, restaurants, pubs/bars, art galleries i cafes.
-Varijabla rsq, odnosno pseudo-${R}^2$ danog modela govori da model objašnjava otprilike 51% varijabilnosti u podacima.
+
+```{r, echo=FALSE}
+plot(data$malls,data$zoo) #graficki prikaz podataka
+lines(data$malls,fit.malls$fitted.values,col='red') #graficki prikaz procijenjenih vrijednosti iz modela
+
+plot(data$restaurants,data$zoo) #graficki prikaz podataka
+lines(data$restaurants,fit.restaurants$fitted.values,col='red') #graficki prikaz procijenjenih vrijednosti iz modela
+
+plot(data$pubs.bars,data$zoo) #graficki prikaz podataka
+lines(data$pubs.bars,fit.pubs_bars$fitted.values,col='red') #graficki prikaz procijenjenih vrijednosti iz modela
+```
+
+Nagibi pravaca linearne regresije potvrđuju tvrdnje o efektima pojedinih razmatranih varijabli na izlaznu varijablu. Kako bi se dobiveni modeli analizirali i usporedili, prvo je potrebno provjeriti da pretpostavke modela nisu narušene. Prvo provjeravamo normalnost reziduala pomoću QQ plota, histograma te pomoću KS testa.
+
+```{r, echo=FALSE}
+require(nortest)
+plot(fit.malls$residuals)
+hist(rstandard(fit.malls))
+qqnorm(rstandard(fit.malls))
+qqline(rstandard(fit.malls))
+ks.test(rstandard(fit.malls), 'pnorm')
+
+plot(fit.restaurants$residuals)
+hist(rstandard(fit.restaurants))
+qqnorm(rstandard(fit.restaurants))
+qqline(rstandard(fit.restaurants))
+ks.test(rstandard(fit.restaurants), 'pnorm')
+
+plot(fit.pubs_bars$residuals)
+hist(rstandard(fit.pubs_bars))
+qqnorm(rstandard(fit.pubs_bars))
+qqline(rstandard(fit.pubs_bars))
+ks.test(rstandard(fit.pubs_bars), 'pnorm')
+```
+
+KS test sugerira kako treba odbaciti hipotezu da su podaci uzeti iz normalne distribucije, dok nam histogrami sugeriraju da se radi o normalnoj distribuciji. Također, na QQ grafovima vidimo kako distribucija donekle nalikuje normalnoj, uz određene zakrivljenosti. Također, iz scatter plot-ova ne vidimo znake heterogenosti varijance (reziduali se ne šire povećanjem $\hat{y}$). Stoga ćemo nastaviti uz stav da pretpostavke linearne regresije nisu jako narušene. 
+Nadalje moramo provjeriti koreliranost kategorija s kojima ćemo pokušati predvidjeti srednje ocjene za kategoriju zoo. Korištenjem paketa u R-u uz estimaciju koeficijenata, testira se i hipoteza: 
+$$
+\beta_i=0
+$$
+
+```{r, echo=FALSE}
+summary(fit.malls)
+summary(fit.restaurants)
+summary(fit.pubs_bars)
+```
+
+Vidimo iz rezultata da su H0 odbačene te možemo pretpostaviti da su svi koeficijenti značajni. Sada ćemo izračunati i Korelacijski koeficijent i testirati ga.
+
+```{r,echo=FALSE}
+cor(data$malls,data$zoo)
+cor.test(data$malls,data$zoo)
+
+cor(data$restaurants,data$zoo)
+cor.test(data$restaurants,data$zoo)
+
+cor(data$pubs.bars,data$zoo)
+cor.test(data$pubs.bars,data$zoo)
+```
+
+Iz provedenih testova još jednom možemo potvrditi da postoji utjecaj varijabli na kategoriju zoo. Sada ćemo pokušati konstruirati model višestruke regresije s prethodno testirane 3 varijable.
+Prije izrade višestruke regresije moramo provjeriti korelaciju kategorija koje će se koristiti kao varijable.
+
+```{r,echo=FALSE}
+cor(cbind(data$malls,data$restaurants,data$pubs.bars)) 
+```
+
+Iz prethodnih podataka vidimo da korelacija kategorije malls te pubs.bars nije velika, dok kategorija restaurants ima popriličnu koreliranost s ostalim kategorijama no ona ne prelazi okvirnu vrijednost od 0.7 stoga ćemo nastaviti s trenutnim regresorima bez promjena.
+
+```{r,echo=FALSE}
+fit.multi = lm(zoo ~ pubs.bars + malls + restaurants, data)
+summary(fit.multi)
+```
+
+Kao što vidimo model je statistički signifikantan; prediktori imaju dovoljno dobar utjecaj s kategorijom zoo. Mjesta za poboljšanje ima u području R-kvadrat vrijednosti, koja je relativno niska (~0.415).
 
 
+##Postoji li značajna razlika u korisničkim ocjenama među kategorija kulturološkog sadržaja ?
+Uzet ćemo da kategorijama kulturološkog sadržaja pripadaju crkve, kazališta, muzeji, umjetničke galerije, spomenici te vrtovi. Da bismo utvrdili postojanje značajne razlike među ocjenama tih kategorija koristit ćemo metodu analize varijance (ANOVA). Točnije upotribit ćemo jednofaktorski ANOVA model.  
 
-Konstruirajmo sada model koji će imati interakcijski član koji uključuje dvije varijable koje su bile među statistički najznačajnijim.
-```{r}
-logreg.mdl.2 = glm(zoo ~ churches + resorts + beaches + parks + theatres + museums + malls + restaurants + pubs.bars + burger.pizza.shops + hotels.other.lodgings + juice.bars + art.galleries + dance.clubs + swimming.pools + gyms + bakeries + beauty...spas + cafes + view.points + monuments + gardens + I(cafes/malls), data = data, family = Gamma())
-summary(logreg.mdl.2)
-```
-Provedimo nad originalnim i ovim, proširenim modelom test omjera izglednosti te, ukoliko je devijanca proširenog modela značajno manja, prihvatit ćemo ga umjesto originalnog modela.
 
-```{r}
-anova(logreg.mdl, logreg.mdl.2, test = "LRT")
-```
-Konstruirajmo još jedan, smanjeni model, koji neće sadržavati regresore koji nisu bili statistički značajni te ponovno provedimo test omjera izglednosti.
+Budući da ANOVA model kreće od sljedećih pretpostavka:
+- nezavisnost pojedinih podataka u uzorcima,
+- normalna razdioba podataka,
+- homogenost varijanci među populacijama
+provest ćemo provjeru normalnosti, a zatim i homogenosti varijanci.
 
-```{r}
-logreg.mdl.3 = glm(zoo ~ churches + beaches + parks + theatres + museums + malls + restaurants + pubs.bars + burger.pizza.shops + juice.bars + art.galleries + bakeries + beauty...spas + cafes + view.points + monuments + gardens, data = data, family = Gamma())
-summary(logreg.mdl.3)
+Provjeru normalnosti ćemo provesti Lillieforsovom inačicom KS testa te na histogramima pokazati distribuciju podataka za kategorije koje koristimo u ovom pitanju.
+
+```{r test pretpostavka normalnosti, echo=FALSE}
+require(nortest)
+lillie.test(data$churches)
+lillie.test(data$theatres)
+lillie.test(data$museums)
+lillie.test(data$art.galleries)
+lillie.test(data$monuments)
+lillie.test(data$gardens)
+
+hist(data$churches)
+hist(data$theatres)
+hist(data$museums)
+hist(data$art.galleries)
+hist(data$monuments)
+hist(data$gardens)
 ```
-```{r}
-anova(logreg.mdl, logreg.mdl.3, test = "LRT")
+
+Iz histograma lako vidimo da podaci nisu baš normalno distribuirani, a rezlutat Lillieforsovog testa nam to i potvrđuje: p-value je inimno mali - manji od 0.05. To bi značilo da možemo odbaciti nultu hipotezu o normalnoj distribuciji. 
+
+Što se tiče homogenosti varijanci različitih populacija, potrebno je testirati:
+$$ \begin{aligned}
+  H_0 & : \sigma_1^2 = \sigma_2^2 = \ldots = \sigma_k^2 \\
+  H_1 & : \text{barem dvije varijance nisu iste}.
+\end{aligned} $$
+
+Tu hipotezu ćemo testirati Bartlettovim testom.
+
+```{r test pretpostavka homogenosti, echo=FALSE}
+# Pretvaranje podataka u dugački format koristeći stack()
+podaci_long <- stack(data[, c("churches", "theatres", "museums", "art.galleries", "monuments", "gardens")])
+
+# Dodavanje faktora za kategorije
+kategorijeF <- rep(c("churches", "theatres", "museums", "art.galleries", "monuments", "gardens"), each = nrow(data))
+podaci_long$kategorijaF <- factor(kategorijeF)
+
+# Provedba Bartlettovog testa za homogenost varijanci
+bartlett_test <- bartlett.test(values ~ kategorijaF, data = podaci_long)
+
+# Ispis rezultata Bartlettovog testa
+print(bartlett_test)
+
+var(data$churches)
+var(data$theatres)
+var(data$museums)
+var(data$art.galleries)
+var(data$monuments)
+var(data$gardens)
 ```
-Konačno, izračunajmo još koeficijent determinacije za prošireni model.
-```{r}
-Rsq = 1 - logreg.mdl.2$deviance/logreg.mdl.2$null.deviance
-Rsq
+
+I ovim testom dobijemo vrlu malu p-vrijednost pa bismo mogli odbaciti nultu hipotezu.
+No kada su veličine grupa podjednake, ANOVA je relativno robusna metoda na blaga odstupanja od pretpostavke normalnosti i homogenosti varijanci. Zbog toga ćemo provesti ANOVA-u.
+
+```{r, echo=FALSE}
+kategorije <- c(rep("churches", 5454), rep("theatres", 5454), rep("museums", 5454), rep("art.galleries", 5454), rep("monuments", 5454), rep("gardens", 5454))
+ocjena <- c(data$churches, data$theatres, data$museums, data$art.galleries, data$monuments, data$gardens)
+df <- data.frame(kategorije, ocjena)
+boxplot(ocjena ~ kategorije, data = df)
+podaci.aov <- aov(ocjena ~ kategorije, data = df)
+summary(podaci.aov)
 ```
-Vidimo kako prošireni model opisuje veću količinu varijabilnosti među podacima nego osnovni model.
+
+Grafički prikaz nam ilustira i pokazuje da postoji značajna razlika između korisničkih ocjena među kategorijama kulturološkog sadržaja, a to nam potvrđuje i ANOVA. 
