@@ -2,8 +2,11 @@
 
 **License**: AFL-3.0 
 
-**Author:**
+**Authors:**
 - Mario Perhat
+- Luka Rogoz
+- Lana Barić
+- Nikola Baretić
   
 **Publication Date:** December 14, 2023.
   
